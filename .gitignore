@@ -52,10 +52,11 @@ sample_data/
 # =============================================================================
 # Node / Frontend
 # =============================================================================
-node_modules/     # covers frontend/node_modules/ automatically
+# covers frontend/node_modules/ automatically
+node_modules/
 
-# Vite build output
-dist/             # covers frontend/dist/ automatically
+# Vite build output — covers frontend/dist/ automatically
+dist/
 
 # =============================================================================
 # IDE / Editor

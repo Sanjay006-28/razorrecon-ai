@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { ThemeProvider } from "./context/ThemeContext";
 import Layout from "./components/layout/Layout";
 import Dashboard from "./pages/Dashboard";
 import Upload from "./pages/Upload";
@@ -8,16 +9,18 @@ import Chat from "./pages/Chat";
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="upload" element={<Upload />} />
-          <Route path="exceptions" element={<Exceptions />} />
-          <Route path="reports" element={<Reports />} />
-          <Route path="chat" element={<Chat />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="upload" element={<Upload />} />
+            <Route path="exceptions" element={<Exceptions />} />
+            <Route path="reports" element={<Reports />} />
+            <Route path="chat" element={<Chat />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }

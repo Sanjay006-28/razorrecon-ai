@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
-export default {
+module.exports = {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -10,7 +11,6 @@ export default {
         sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
       },
       colors: {
-        // Override indigo-600 to our exact accent
         indigo: {
           50:  '#EEF2FF',
           100: '#E0E7FF',
@@ -22,6 +22,7 @@ export default {
           700: '#4338CA',
           800: '#3730A3',
           900: '#312E81',
+          950: '#1E1B4B',
         },
       },
     },
