@@ -4,3 +4,5 @@ pandas
 sqlalchemy
 python-multipart
 google-generativeai
+pytest
+pytest-asyncio
