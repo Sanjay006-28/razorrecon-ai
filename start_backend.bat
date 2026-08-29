@@ -15,6 +15,6 @@ cd backend
 echo Starting uvicorn on port 8001...
 echo Open http://127.0.0.1:8001/docs in your browser
 echo.
-uvicorn app.main:app --reload --port 8001
+uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload --reload-dir app
 
 pause

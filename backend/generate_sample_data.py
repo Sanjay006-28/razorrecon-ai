@@ -18,18 +18,30 @@ from datetime import datetime, timedelta
 import pandas as pd
 from faker import Faker
 
-# ── reproducibility ──────────────────────────────────────────────────────────
-random.seed(42)
-fake = Faker("en_IN")
-Faker.seed(42)
+# ── CLI arguments & reproducibility ──────────────────────────────────────────
+import argparse
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "sample_data")
+parser = argparse.ArgumentParser(description="Generate sample reconciliation CSVs.")
+parser.add_argument("--seed", type=int, default=42, help="Random seed (default 42)")
+parser.add_argument("--output", type=str, default=None, help="Output directory path")
+args = parser.parse_args()
+
+current_seed = args.seed
+random.seed(current_seed)
+fake = Faker("en_IN")
+Faker.seed(current_seed)
+
+if args.output:
+    OUTPUT_DIR = os.path.abspath(args.output)
+else:
+    OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "sample_data")
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 BASE_DATE = datetime(2024, 6, 1)
 
-CURRENCIES   = ["INR"] * 8 + ["USD", "EUR"]          # mostly INR
+CURRENCIES   = ["INR"]
 METHODS      = ["card", "upi", "netbanking", "wallet", "emi"]
 PAY_STATUSES = ["captured", "captured", "captured", "failed", "refunded"]
 
@@ -262,7 +274,7 @@ SEPARATOR = "=" * 70
 print(f"\n{SEPARATOR}")
 print("  SAMPLE DATA GENERATION COMPLETE")
 print(SEPARATOR)
-print(f"  📁 Output folder : {os.path.abspath(OUTPUT_DIR)}")
+print(f"  > Output folder : {os.path.abspath(OUTPUT_DIR)}")
 print(f"  payments.csv     : {len(df_payments)} rows")
 print(f"  settlements.csv  : {len(df_settlements)} rows")
 print(f"  bank_statement.csv: {len(df_bank)} rows")

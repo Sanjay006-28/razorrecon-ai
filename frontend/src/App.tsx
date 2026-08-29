@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import Upload from "./pages/Upload";
 import Exceptions from "./pages/Exceptions";
 import Reports from "./pages/Reports";
+import History from "./pages/History";
 import Chat from "./pages/Chat";
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
             <Route path="upload" element={<Upload />} />
             <Route path="exceptions" element={<Exceptions />} />
             <Route path="reports" element={<Reports />} />
+            <Route path="history" element={<History />} />
             <Route path="chat" element={<Chat />} />
           </Route>
         </Routes>

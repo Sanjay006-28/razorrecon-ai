@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BarChart2,
   MessageSquare,
+  Clock,
   Sun,
   Moon,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Upload", to: "/upload", icon: <Upload size={18} /> },
   { label: "Exceptions", to: "/exceptions", icon: <AlertTriangle size={18} /> },
   { label: "Reports", to: "/reports", icon: <BarChart2 size={18} /> },
+  { label: "History", to: "/history", icon: <Clock size={18} /> },
   { label: "Chat", to: "/chat", icon: <MessageSquare size={18} /> },
 ];
 

@@ -47,6 +47,7 @@ class ExcType:
     DUPLICATE           = "DUPLICATE"
     AMOUNT_MISMATCH     = "AMOUNT_MISMATCH"
     DELAYED_SETTLEMENT  = "DELAYED_SETTLEMENT"
+    DUPLICATE_BANK      = "DUPLICATE_BANK_CREDIT"
 
 
 SEVERITY_MAP: dict[str, str] = {
@@ -56,6 +57,7 @@ SEVERITY_MAP: dict[str, str] = {
     ExcType.AMOUNT_MISMATCH:     "medium",
     ExcType.DUPLICATE:           "medium",
     ExcType.DELAYED_SETTLEMENT:  "low",
+    ExcType.DUPLICATE_BANK:      "high",
 }
 
 
@@ -129,25 +131,17 @@ def merge_all(
 ) -> pd.DataFrame:
     """
     Build the single wide reconciliation frame via two left-joins.
-
-    Join 1 — payments ← settlements on `payment_id` (left join)
-        Every payment row is preserved.  Payments without a matching
-        settlement get NaN in all settlement columns.
-
-    Join 2 — result ← bank_statement on `utr_number` (left join)
-        Every payment row is still preserved.  Rows where the settlement
-        has no matching bank credit get NaN in bank columns.
-
-    Returns
-    -------
-    pd.DataFrame
-        One row per payment, enriched with settlement and bank columns.
+    Deduplicates bank by utr_number to preserve 1-to-1 payment mapping.
     """
+    utr_col = "utr_number" if "utr_number" in bank.columns else "bank_utr_number"
+    b_dedup = bank.drop_duplicates(subset=[utr_col], keep="first") if not bank.empty and utr_col in bank.columns else bank
+
     return (
         payments
         .merge(settlements, on="payment_id", how="left", suffixes=("", "_setl"))
-        .merge(bank,        on="utr_number",  how="left", suffixes=("", "_bank"))
+        .merge(b_dedup,     on="utr_number",  how="left", suffixes=("", "_bank"))
     )
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,29 +178,15 @@ def rule_unmatched_no_settlement(df: pd.DataFrame) -> pd.Series:
 def rule_unmatched_no_bank_credit(df: pd.DataFrame) -> pd.Series:
     """
     Rule: UNMATCHED_NO_BANK_CREDIT
-    --------------------------------
-    Business logic
-        A settlement record exists in the internal system but no corresponding
-        credit appears in the bank statement.  This suggests the bank transfer
-        may have failed or the UTR number does not match.  Severity is HIGH
-        because the money may genuinely not have arrived.
-
-    Detection
-        `settlement_id` is NOT NaN (settlement exists) but `bank_credited_amount`
-        IS NaN after the left-join on `utr_number`.
-
-    Parameters
-    ----------
-    df : merged DataFrame
-
-    Returns
-    -------
-    pd.Series[bool]
-        True for rows with a settlement but no bank credit.
     """
     has_settlement  = df["settlement_id"].notna()
-    has_bank_credit = df["bank_credited_amount"].notna()
+    bank_col = "bank_credited_amount" if "bank_credited_amount" in df.columns else ("credited_amount" if "credited_amount" in df.columns else None)
+    if bank_col is None:
+        has_bank_credit = pd.Series(False, index=df.index)
+    else:
+        has_bank_credit = df[bank_col].notna()
     return has_settlement & ~has_bank_credit
+
 
 
 def rule_amount_mismatch(
@@ -429,6 +409,8 @@ def classify(
     """
     out = df.copy()
     out["recon_status"] = ExcType.MATCHED  # optimistic default
+    out["sla_days"] = sla_days
+
 
     # Compute delay_days once — used by both the DELAYED rule and result dict.
     # Coerce both columns to datetime so that NaN settlement_date (from a
@@ -466,9 +448,123 @@ def classify(
 # Result builder  (pure function)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def find_orphan_bank_credits(
+    settlements: pd.DataFrame,
+    bank: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    """
+    Identify bank statement rows whose utr_number does not exist in any settlement.
+
+    Emits UNMATCHED_NO_BANK_CREDIT exceptions for standalone bank deposits that
+    were received without an internal settlement record.
+    """
+    if bank.empty or ("utr_number" not in bank.columns and "bank_utr_number" not in bank.columns):
+        return []
+
+    utr_col = "utr_number" if "utr_number" in bank.columns else "bank_utr_number"
+
+    settled_utrs = set()
+    if not settlements.empty and "utr_number" in settlements.columns:
+        settled_utrs = set(settlements["utr_number"].dropna().astype(str).str.strip())
+
+    orphans: list[dict[str, Any]] = []
+
+    for _, row in bank.iterrows():
+        utr = row.get(utr_col)
+        if pd.isna(utr) or str(utr).strip() not in settled_utrs:
+            amount = row.get("bank_credited_amount") if "bank_credited_amount" in row else row.get("credited_amount")
+            credit_date = row.get("bank_credit_date") if "bank_credit_date" in row else row.get("credit_date")
+            narration = row.get("bank_narration") if "bank_narration" in row else row.get("narration", "")
+
+            amount_val = _safe_float(amount)
+            utr_str = _safe_str(utr)
+            date_str = _safe_ts(credit_date)
+
+            detail_msg = f"unidentified bank credit for UTR {utr_str}: ₹{amount_val} ({narration})" if narration else f"unidentified bank credit for UTR {utr_str}: ₹{amount_val}"
+
+            orphans.append({
+                "type": ExcType.UNMATCHED_NO_BANK,
+                "payment_id": None,
+                "order_id": None,
+                "exception_date": date_str,
+                "details": detail_msg,
+                "description": detail_msg,
+                "suggested_action": "trace unidentified bank credit — money received with no matching settlement record",
+                "amount": amount_val,
+                "amount_impact": amount_val,
+                "severity": "high",
+                "settlement_id": None,
+                "utr_number": utr_str,
+                "payment_date": None,
+                "settlement_date": None,
+                "delay_days": None,
+                "settled_amount": amount_val,
+                "bank_amount": amount_val,
+                "internal_amount": None,
+                "discrepancy_amount": amount_val,
+            })
+
+    return orphans
+
+
+def find_duplicate_bank_credits(bank: pd.DataFrame) -> list[dict[str, Any]]:
+    """
+    Identify duplicate bank statement entries for the same utr_number.
+
+    Emits DUPLICATE_BANK_CREDIT exceptions for each extra credit beyond the first on a UTR.
+    """
+    if bank.empty or ("utr_number" not in bank.columns and "bank_utr_number" not in bank.columns):
+        return []
+
+    utr_col = "utr_number" if "utr_number" in bank.columns else "bank_utr_number"
+    duplicates: list[dict[str, Any]] = []
+
+    for utr, group in bank.groupby(utr_col, sort=False):
+        if pd.isna(utr) or len(group) < 2:
+            continue
+
+        rows = group.to_dict("records")
+        for extra_row in rows[1:]:
+            amount = extra_row.get("bank_credited_amount") if "bank_credited_amount" in extra_row else extra_row.get("credited_amount")
+            credit_date = extra_row.get("bank_credit_date") if "bank_credit_date" in extra_row else extra_row.get("credit_date")
+            narration = extra_row.get("bank_narration") if "bank_narration" in extra_row else extra_row.get("narration", "")
+
+            amount_val = _safe_float(amount)
+            utr_str = _safe_str(utr)
+            extra_date_str = _safe_ts(credit_date)
+
+            detail_msg = f"duplicate bank credit entry for UTR {utr_str}: ₹{amount_val} ({narration})" if narration else f"duplicate bank credit entry for UTR {utr_str}: ₹{amount_val}"
+
+            duplicates.append({
+                "type": ExcType.DUPLICATE_BANK,
+                "payment_id": None,
+                "order_id": None,
+                "exception_date": extra_date_str,
+                "details": detail_msg,
+                "description": detail_msg,
+                "suggested_action": "verify double credit with bank — funds may need reversal",
+                "amount": amount_val,
+                "amount_impact": amount_val,
+                "severity": "high",
+                "settlement_id": None,
+                "utr_number": utr_str,
+                "payment_date": None,
+                "settlement_date": None,
+                "delay_days": None,
+                "settled_amount": amount_val,
+                "bank_amount": amount_val,
+                "internal_amount": None,
+                "discrepancy_amount": amount_val,
+            })
+
+    return duplicates
+
+
 def build_result(
     classified: pd.DataFrame,
     sla_days: int,
+    settlements: pd.DataFrame | None = None,
+    bank: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """
     Convert the classified DataFrame into the final result dict.
@@ -477,19 +573,22 @@ def build_result(
     ----------
     classified : output of `classify`
     sla_days   : echoed back into the result for traceability
+    settlements: optional settlements DataFrame for orphan bank check
+    bank       : optional bank statement DataFrame for orphan bank check
 
     Returns
     -------
     dict with keys:
-        match_rate        : float  — percentage of MATCHED rows
-        total_records     : int
-        matched           : int
-        unmatched         : int
-        exception_counts  : dict[str, int] — count per exception type
-        exceptions        : list[dict]     — one entry per non-MATCHED row
-        settlement_totals : dict           — financial summary
-        sla_days_used     : int
-        run_at            : ISO-8601 UTC timestamp string
+        match_rate            : float  — percentage of MATCHED rows
+        total_records         : int
+        matched               : int
+        unmatched             : int
+        exception_counts      : dict[str, int] — count per exception type
+        exceptions            : list[dict]     — structured list of exceptions
+        unmatched_bank_credits: dict           — count & sum of orphan bank credits
+        settlement_totals     : dict           — financial summary
+        sla_days_used         : int
+        run_at                : ISO-8601 UTC timestamp string
     """
     total   = len(classified)
     matched = int((classified["recon_status"] == ExcType.MATCHED).sum())
@@ -497,9 +596,23 @@ def build_result(
 
     exceptions = _build_exceptions(classified)
 
+    orphan_exceptions: list[dict[str, Any]] = []
+    duplicate_bank_exceptions: list[dict[str, Any]] = []
+    if settlements is not None and bank is not None:
+        orphan_exceptions = find_orphan_bank_credits(settlements, bank)
+        duplicate_bank_exceptions = find_duplicate_bank_credits(bank)
+
+    all_exceptions = exceptions + orphan_exceptions + duplicate_bank_exceptions
+
+
     exc_counts: dict[str, int] = {}
-    for e in exceptions:
+    for e in all_exceptions:
         exc_counts[e["type"]] = exc_counts.get(e["type"], 0) + 1
+
+    unmatched_bank_credits = {
+        "count": len(orphan_exceptions),
+        "total_amount": round(sum((e["amount"] or 0.0) for e in orphan_exceptions), 2),
+    }
 
     settled_rows = classified[classified["settled_amount"].notna()] if "settled_amount" in classified.columns else classified.iloc[0:0]
     total_payment  = round(float(classified["amount"].sum()), 2)
@@ -509,18 +622,47 @@ def build_result(
         2,
     )
 
+    amount_mismatches_total = round(
+        sum(
+            (e.get("amount_impact") or e.get("discrepancy_amount") or 0.0)
+            for e in all_exceptions
+            if e.get("type") == ExcType.AMOUNT_MISMATCH or e.get("type") == "AMOUNT_MISMATCH"
+        ),
+        2,
+    )
+    unsettled_value_total = round(
+        sum(
+            (e.get("amount") or e.get("internal_amount") or 0.0)
+            for e in all_exceptions
+            if e.get("type") == ExcType.UNMATCHED_NO_SETTLE or e.get("type") == "UNMATCHED_NO_SETTLEMENT"
+        ),
+        2,
+    )
+    duplicate_charges_total = round(
+        sum(
+            (e.get("amount_impact") or e.get("discrepancy_amount") or 0.0)
+            for e in all_exceptions
+            if e.get("type") == ExcType.DUPLICATE or e.get("type") == "DUPLICATE"
+        ),
+        2,
+    )
+
     return {
-        "match_rate":       match_rate,
-        "total_records":    total,
-        "matched":          matched,
-        "unmatched":        total - matched,
-        "exception_counts": exc_counts,
-        "exceptions":       exceptions,
+        "match_rate":            match_rate,
+        "total_records":         total,
+        "matched":               matched,
+        "unmatched":             total - matched,
+        "exception_counts":      exc_counts,
+        "exceptions":            all_exceptions,
+        "unmatched_bank_credits": unmatched_bank_credits,
         "settlement_totals": {
-            "total_payment_amount": total_payment,
-            "total_settled_amount": total_settled,
-            "total_discrepancy":    total_discrepancy,
-            "currency":             "INR",
+            "total_payment_amount":    total_payment,
+            "total_settled_amount":    total_settled,
+            "total_discrepancy":       total_discrepancy,
+            "amount_mismatches_total": amount_mismatches_total,
+            "unsettled_value_total":   unsettled_value_total,
+            "duplicate_charges_total": duplicate_charges_total,
+            "currency":                "INR",
         },
         "sla_days_used": sla_days,
         "run_at":        datetime.now(timezone.utc).isoformat(),
@@ -544,12 +686,17 @@ def _build_exceptions(df: pd.DataFrame) -> list[dict[str, Any]]:
 
         exceptions.append({
             "type":            exc_type,
-            "payment_id":      row.get("payment_id"),
-            "order_id":        row.get("order_id"),
+            # ── Structured identity fields (first-class, never embed in strings) ──
+            "payment_id":      _safe_str(row.get("payment_id")),
+            "order_id":        _safe_str(row.get("order_id")),
+            "exception_date":  _exception_date(row, exc_type),
+            # ── Human-readable summary (may reference IDs as text) ──
             "details":         _exception_detail(row, exc_type),
+            # ── Financial fields ──
             "amount":          _safe_float(amount),
             "amount_impact":   _amount_impact(row, exc_type),
             "severity":        SEVERITY_MAP.get(exc_type, "medium"),
+            # ── Settlement / bank context ──
             "settlement_id":   _safe_str(row.get("settlement_id")),
             "utr_number":      _safe_str(row.get("utr_number")),
             "payment_date":    _safe_ts(row.get("payment_date")),
@@ -559,6 +706,24 @@ def _build_exceptions(df: pd.DataFrame) -> list[dict[str, Any]]:
         })
 
     return exceptions
+
+
+def _exception_date(row: pd.Series, exc_type: str) -> str | None:
+    """
+    Return the single most relevant ISO-8601 timestamp for this exception.
+
+    Rationale per type
+    ------------------
+    UNMATCHED_NO_SETTLEMENT  → payment_date   (no settlement exists; pin to when money left)
+    DUPLICATE                → payment_date   (earliest charge date is the reference point)
+    AMOUNT_MISMATCH          → settlement_date (mismatch is discovered at settlement time)
+    UNMATCHED_NO_BANK_CREDIT → settlement_date (settlement was created; bank didn't credit)
+    DELAYED_SETTLEMENT       → settlement_date (the late arrival date is what matters)
+    """
+    _USE_PAYMENT_DATE = {ExcType.UNMATCHED_NO_SETTLE, ExcType.DUPLICATE}
+    if exc_type in _USE_PAYMENT_DATE:
+        return _safe_ts(row.get("payment_date"))
+    return _safe_ts(row.get("settlement_date"))
 
 
 def _exception_detail(row: pd.Series, exc_type: str) -> str:
@@ -595,10 +760,12 @@ def _amount_impact(row: pd.Series, exc_type: str) -> float | None:
     amount  = row.get("amount")
     settled = row.get("settled_amount")
 
-    if exc_type == ExcType.AMOUNT_MISMATCH and pd.notna(amount) and pd.notna(settled):
-        return round(abs(float(amount) - float(settled)), 2)
-    if exc_type in (ExcType.UNMATCHED_NO_SETTLE, ExcType.UNMATCHED_NO_BANK, ExcType.DUPLICATE):
-        return _safe_float(amount)
+    # All exception types: calculate |amount - settled_amount| as financial impact
+    # If settled_amount is None or NaN, treat as 0.0
+    if pd.notna(amount):
+        settled_val = float(settled) if pd.notna(settled) else 0.0
+        return round(abs(float(amount) - settled_val), 2)
+    
     return None
 
 
@@ -655,13 +822,14 @@ class ReconciliationEngine:
             tolerance_pct=self.tolerance_pct,
             dup_window_secs=self.dup_window_secs,
         )
-        result = build_result(classified, sla_days=self.sla_days)
+        result = build_result(classified, sla_days=self.sla_days, settlements=settlements, bank=bank)
 
         logger.info(
             "Reconciliation done — match_rate=%.2f%% total=%d exceptions=%d",
             result["match_rate"], result["total_records"], len(result["exceptions"]),
         )
         return result
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

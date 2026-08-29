@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 
 from app.database import get_db
+from app.models import ReconciliationRun
 
 router = APIRouter(prefix="/summary", tags=["Summary"])
 
@@ -50,7 +52,30 @@ async def get_reconciliation_trends(
     db: Session = Depends(get_db),
 ):
     """
-    Return time-series data for match rates and exception counts.
-    Placeholder — full implementation coming soon.
+    Return time-series data for match rates.
     """
-    return {"days": days, "data_points": []}
+    import datetime
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    
+    runs = (
+        db.query(ReconciliationRun)
+        .filter(ReconciliationRun.started_at >= cutoff)
+        .order_by(ReconciliationRun.started_at.asc())
+        .limit(100)
+        .all()
+    )
+    
+    data_points = []
+    for r in runs:
+        match_rate = 0.0
+        if r.total_transactions and r.total_transactions > 0:
+            match_rate = (r.matched_count or 0) / r.total_transactions * 100.0
+            
+        data_points.append({
+            "run_id": r.id,
+            "date": r.started_at.isoformat() if r.started_at else None,
+            "match_rate": round(match_rate, 2),
+            "exceptions": r.exception_count or 0
+        })
+        
+    return {"days": days, "data_points": data_points}

@@ -147,6 +147,11 @@ class Exception(Base):
     description = Column(Text, nullable=True)
     resolution = Column(Text, nullable=True)
 
+    # Identifiers
+    payment_id = Column(String(100), nullable=True, index=True)
+    order_id = Column(String(100), nullable=True, index=True)
+    exception_date = Column(String(50), nullable=True)
+
     # Amount discrepancy details
     internal_amount = Column(Float, nullable=True)
     bank_amount = Column(Float, nullable=True)
@@ -156,8 +161,14 @@ class Exception(Base):
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     resolved_by = Column(String(100), nullable=True)
 
+    # AI Analysis persistent fields
+    ai_explanation = Column(Text, nullable=True)
+    ai_root_cause = Column(Text, nullable=True)
+    ai_suggested_action = Column(Text, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
 
     # Foreign keys
     transaction_id = Column(
