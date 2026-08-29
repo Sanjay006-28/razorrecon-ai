@@ -3,8 +3,10 @@ uvicorn[standard]
 pandas
 sqlalchemy
 python-multipart
+python-dotenv
 google-genai
+openpyxl
+faker
 pytest
 pytest-asyncio
 httpx
-openpyxl
