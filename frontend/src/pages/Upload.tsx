@@ -146,7 +146,7 @@ function StepIndicator({ stage }: { stage: Stage }) {
     { key: "done",      label: "Complete" },
   ];
 
-  const active = stage === "uploading" ? 0 : stage === "running" ? 1 : 2;
+  const active = stage === "uploading" ? 0 : stage === "running" ? 1 : stage === "done" ? 3 : 0;
 
   return (
     <div className="flex items-center gap-0">
@@ -163,18 +163,26 @@ function StepIndicator({ stage }: { stage: Stage }) {
               {i < active ? "✓" : i + 1}
             </div>
             <span className={`text-[10px] font-medium whitespace-nowrap ${
-              i === active ? "text-indigo-600 dark:text-indigo-400" : "text-gray-400 dark:text-gray-500"
+              i < active || i === active ? "text-indigo-600 dark:text-indigo-400 font-semibold" : "text-gray-400 dark:text-gray-500"
             }`}>{step.label}</span>
           </div>
           {i < steps.length - 1 && (
             <div className={`h-px w-16 mb-4 mx-1 transition-all ${
-              i < active ? "bg-green-400" : "bg-gray-200 dark:bg-gray-700"
+              i < active - 1 ? "bg-green-400" : "bg-gray-200 dark:bg-gray-700"
             }`} />
           )}
         </div>
       ))}
     </div>
   );
+}
+
+interface RunResultData {
+  runId: number;
+  matchRate: number;
+  totalRecords: number;
+  matched: number;
+  exceptionCount: number;
 }
 
 // ─── Main Component ────────────────────────────────────────────────────────────
@@ -189,6 +197,7 @@ export default function Upload() {
 
   const [stage, setStage] = useState<Stage>("idle");
   const [runId, setRunId] = useState<number | null>(null);
+  const [runResult, setRunResult] = useState<RunResultData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [slaDays, setSlaDays] = useState<number | "">(2);
 
@@ -198,6 +207,10 @@ export default function Upload() {
   function setFile(key: FileKey, f: File | null) {
     setFiles(prev => ({ ...prev, [key]: f }));
     setError(null);
+    if (stage === "done") {
+      setStage("idle");
+      setRunResult(null);
+    }
   }
 
   // Extract a human-readable error string from various API response shapes
@@ -226,6 +239,7 @@ export default function Upload() {
   async function handleRun() {
     if (!allReady || isActive) return;
     setError(null);
+    setRunResult(null);
 
     try {
       // ── Step 1: Upload ──────────────────────────────────────────────────
@@ -253,7 +267,19 @@ export default function Upload() {
       if (!runRes.ok) throw new Error(extractErrorDetail(runJson));
 
       const id: number = runJson.run_id ?? runJson.id ?? 1;
+      const exceptionCount = Object.values(runJson.exception_counts || {}).reduce(
+        (acc: number, val: unknown) => acc + (typeof val === "number" ? val : 0),
+        0
+      );
+
       setRunId(id);
+      setRunResult({
+        runId: id,
+        matchRate: typeof runJson.match_rate === "number" ? runJson.match_rate : 0,
+        totalRecords: typeof runJson.total_records === "number" ? runJson.total_records : 0,
+        matched: typeof runJson.matched === "number" ? runJson.matched : 0,
+        exceptionCount: exceptionCount || (runJson.unmatched ?? 0),
+      });
       localStorage.setItem("lastRunId", String(id));
       setStage("done");
 
@@ -288,20 +314,37 @@ export default function Upload() {
         ))}
       </div>
 
-      {/* ── Progress ── */}
+      {/* ── Progress / Success Card ── */}
       {(isActive || stage === "done") && (
         <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl px-6 py-5 shadow-sm mb-5 flex flex-col items-center gap-4">
           <StepIndicator stage={stage} />
           {isActive && (
             <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
               <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
-              {stage === "uploading" ? "Uploading and validating CSVs…" : "Processing reconciliation…"}
+              <span>{stage === "uploading" ? "Uploading and validating CSVs…" : "Processing reconciliation…"}</span>
             </div>
           )}
-          {stage === "done" && (
-            <p className="text-sm text-green-600 dark:text-green-400 font-medium">
-              ✓ Reconciliation complete — Run #{runId}
-            </p>
+          {stage === "done" && runResult && (
+            <div className="w-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-200">
+                    Reconciliation complete — {runResult.matchRate.toFixed(1)}% match rate, {runResult.exceptionCount} exceptions found
+                  </p>
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">
+                    Run #{runResult.runId} • {runResult.matched} of {runResult.totalRecords} payments matched cleanly
+                  </p>
+                </div>
+              </div>
+              <button
+                id="go-to-dashboard"
+                onClick={() => navigate("/")}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md hover:shadow-lg transition-all flex-shrink-0 cursor-pointer"
+              >
+                Go to Dashboard <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -334,36 +377,38 @@ export default function Upload() {
             min={0}
             max={30}
             value={slaDays}
+            disabled={isActive}
             onChange={(e) => {
               const val = e.target.value;
               setSlaDays(val === "" ? "" : parseInt(val));
             }}
-            className="w-16 px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 shadow-sm"
+            className="w-16 px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 shadow-sm disabled:opacity-50"
           />
         </div>
-        <button
-          id="start-reconciliation"
-          onClick={handleRun}
-          disabled={!allReady || isActive}
-          className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-            allReady && !isActive
-              ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-md hover:shadow-lg"
-              : "bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed"
-          }`}
-        >
-          {isActive && <Loader2 className="w-4 h-4 animate-spin" />}
-          {stage === "uploading" && "Uploading…"}
-          {stage === "running"   && "Running…"}
-          {(stage === "idle" || stage === "error" || stage === "done") && "Start Reconciliation"}
-        </button>
-
-        {stage === "done" && runId && (
+        
+        {stage === "done" && runResult ? (
           <button
-            id="go-to-dashboard"
-            onClick={() => navigate("/")}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-green-500 text-white hover:bg-green-600 transition-colors shadow-md"
+            onClick={() => {
+              setStage("idle");
+              setRunResult(null);
+            }}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-300 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors cursor-pointer"
           >
-            View Dashboard <ArrowRight className="w-4 h-4" />
+            Reconcile Another Batch
+          </button>
+        ) : (
+          <button
+            id="start-reconciliation"
+            onClick={handleRun}
+            disabled={!allReady || isActive}
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+              allReady && !isActive
+                ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-md hover:shadow-lg cursor-pointer"
+                : "bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed"
+            }`}
+          >
+            {isActive && <Loader2 className="w-4 h-4 animate-spin text-white" />}
+            {isActive ? "Reconciling..." : "Start Reconciliation"}
           </button>
         )}
       </div>
