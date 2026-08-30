@@ -121,7 +121,7 @@ A single FastAPI monolith and a single React app — clean, fast, and standalone
 - **Backend:** FastAPI, SQLAlchemy, SQLite, Pandas
 - **AI:** Google Gemini (`google-genai` SDK), with an automatic model-fallback chain
 - **Reports:** openpyxl (Excel export)
-- **Testing:** pytest (69 tests, covering every reconciliation rule, priority logic, API endpoint, and edge case — empty files, malformed CSVs, missing columns, non-numeric values)
+- **Testing:** pytest (70 tests, covering every reconciliation rule, priority logic, API endpoint, and edge case — empty files, malformed CSVs, missing columns, non-numeric values, and row-level Excel reconciliation regression guards)
 
 ---
 
@@ -210,7 +210,7 @@ razorrecon-ai/
 │   │       └── report_generator.py  # openpyxl 3-sheet Excel report builder
 │   ├── sample_data/                 # Canonical mock transaction CSVs
 │   ├── tests/
-│   │   └── test_reconciliation.py   # 69 automated tests
+│   │   └── test_reconciliation.py   # 70 automated tests
 │   ├── generate_sample_data.py      # Mock dataset generator
 │   └── requirements.txt             # Python dependencies
 ├── frontend/

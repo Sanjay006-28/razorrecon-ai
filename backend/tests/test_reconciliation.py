@@ -1767,3 +1767,56 @@ def test_upload_wrong_file_extension_rejected():
     assert "not a CSV file" in detail
 
 
+def test_raw_reconciliation_sheet_exact_63_rows_for_run_1():
+    """
+    Permanent regression guard: Raw Reconciliation sheet for Run 1 must contain
+    EXACTLY 63 data rows (43 matched + 20 payment-level exceptions), excluding header.
+    Fails if join fan-out regression occurs.
+    """
+    import io
+    from openpyxl import load_workbook
+    from app.database import SessionLocal
+    from app.services.report_generator import generate_excel_report
+
+    db = SessionLocal()
+    try:
+        stream = generate_excel_report(1, db)
+        wb = load_workbook(stream)
+        assert "Raw Reconciliation" in wb.sheetnames, "Missing 'Raw Reconciliation' sheet"
+        ws_raw = wb["Raw Reconciliation"]
+
+        rows = list(ws_raw.iter_rows(values_only=True))
+        assert len(rows) > 0, "Raw Reconciliation sheet is empty"
+
+        header = rows[0]
+        expected_header = (
+            "payment_id",
+            "order_id",
+            "payment_amount",
+            "settled_amount",
+            "bank_credited_amount",
+            "utr_number",
+            "payment_date",
+            "settlement_date",
+            "status",
+        )
+        assert header == expected_header, f"Header mismatch: {header} vs {expected_header}"
+
+        data_rows = rows[1:]
+        assert len(data_rows) == 63, f"Expected exactly 63 data rows in Raw Reconciliation, found {len(data_rows)}"
+
+        # Status breakdown validation
+        from collections import Counter
+        counts = Counter(r[8] for r in data_rows)
+        assert counts["MATCHED"] == 43, f"Expected 43 MATCHED rows, found {counts['MATCHED']}"
+        assert counts["DUPLICATE"] == 6, f"Expected 6 DUPLICATE rows, found {counts['DUPLICATE']}"
+        assert counts["DELAYED_SETTLEMENT"] == 5, f"Expected 5 DELAYED_SETTLEMENT rows, found {counts['DELAYED_SETTLEMENT']}"
+        assert counts["UNMATCHED_NO_SETTLEMENT"] == 5, f"Expected 5 UNMATCHED_NO_SETTLEMENT rows, found {counts['UNMATCHED_NO_SETTLEMENT']}"
+        assert counts["AMOUNT_MISMATCH"] == 4, f"Expected 4 AMOUNT_MISMATCH rows, found {counts['AMOUNT_MISMATCH']}"
+        assert sum(counts.values()) == 63
+        wb.close()
+    finally:
+        db.close()
+
+
+
