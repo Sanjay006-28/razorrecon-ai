@@ -78,7 +78,7 @@ graph TB
         UI_UP["CSV Upload Zone\n(Multi-File Drop, SLA Config)"]
         UI_DASH["Live Dashboard\n(Recharts, Match Rate %, Invariants)"]
         UI_EXC["Exceptions View\n(Diagnosis Cards, Filters, Search)"]
-        UI_CHAT["AI Copilot Chat Interface\n(Settlement Q&A Assistant)"]
+        UI_CHAT["Gemini Chat Interface\n(Settlement Q&A Assistant)"]
         UI_HIST["Run History & Trends"]
     end
 
