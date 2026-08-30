@@ -1769,18 +1769,69 @@ def test_upload_wrong_file_extension_rejected():
 
 def test_raw_reconciliation_sheet_exact_63_rows_for_run_1():
     """
-    Permanent regression guard: Raw Reconciliation sheet for Run 1 must contain
-    EXACTLY 63 data rows (43 matched + 20 payment-level exceptions), excluding header.
-    Fails if join fan-out regression occurs.
+    Permanent regression guard: Raw Reconciliation sheet for a standard sample run
+    must contain EXACTLY 63 data rows (43 matched + 20 payment-level exceptions),
+    excluding header. Fails if join fan-out regression occurs. Self-contained fixture.
     """
     import io
+    import json
+    from pathlib import Path
     from openpyxl import load_workbook
-    from app.database import SessionLocal
     from app.services.report_generator import generate_excel_report
+    from app.services.reconciliation import ReconciliationEngine
 
-    db = SessionLocal()
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    run = None
     try:
-        stream = generate_excel_report(1, db)
+        data_dir = Path("sample_data")
+        if not data_dir.exists():
+            data_dir = Path("../sample_data")
+
+        engine_inst = ReconciliationEngine(
+            payments_path=data_dir / "payments.csv",
+            settlements_path=data_dir / "settlements.csv",
+            bank_statement_path=data_dir / "bank_statement.csv",
+            sla_days=2,
+        )
+        result = engine_inst.run()
+
+        run = ReconciliationRun(
+            run_name="Self-contained Sample Run",
+            status=ReconciliationStatus.COMPLETED,
+            total_transactions=result["total_records"],
+            matched_count=result["matched"],
+            unmatched_count=result["unmatched"],
+            exception_count=len(result.get("exceptions", [])),
+            ai_insights=json.dumps({
+                "settlement_totals": result.get("settlement_totals", {}),
+                "exception_counts": result.get("exception_counts", {}),
+                "match_rate": result["match_rate"],
+            }),
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+
+        # Populate exceptions
+        for e in result.get("exceptions", []):
+            db.add(
+                ExceptionModel(
+                    reconciliation_run_id=run.id,
+                    exception_type=e.get("type"),
+                    severity=e.get("severity", "medium"),
+                    payment_id=e.get("payment_id"),
+                    order_id=e.get("order_id"),
+                    exception_date=e.get("exception_date"),
+                    description=e.get("details") or e.get("description"),
+                    internal_amount=e.get("amount") or e.get("internal_amount"),
+                    bank_amount=e.get("settled_amount") or e.get("bank_amount"),
+                    discrepancy_amount=e.get("amount_impact") or e.get("discrepancy_amount"),
+                )
+            )
+        db.commit()
+
+        stream = generate_excel_report(run.id, db)
         wb = load_workbook(stream)
         assert "Raw Reconciliation" in wb.sheetnames, "Missing 'Raw Reconciliation' sheet"
         ws_raw = wb["Raw Reconciliation"]
@@ -1816,7 +1867,12 @@ def test_raw_reconciliation_sheet_exact_63_rows_for_run_1():
         assert sum(counts.values()) == 63
         wb.close()
     finally:
+        if run is not None:
+            db.query(ExceptionModel).filter(ExceptionModel.reconciliation_run_id == run.id).delete(synchronize_session=False)
+            db.query(ReconciliationRun).filter(ReconciliationRun.id == run.id).delete(synchronize_session=False)
+            db.commit()
         db.close()
+
 
 
 
