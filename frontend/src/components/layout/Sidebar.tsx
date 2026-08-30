@@ -80,7 +80,7 @@ export default function Sidebar() {
           )}
         </button>
         <p className="text-[11px] text-gray-400 dark:text-gray-600">
-          Razorpay Buildthon 2026
+          Razorpay Buildathon — Track 04
         </p>
       </div>
     </aside>
