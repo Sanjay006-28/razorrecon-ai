@@ -12,9 +12,9 @@ Built for the Razorpay Buildathon — Track 04: AI Finance Controller.
 | :---: | :---: |
 | ![Dashboard](dashboard.png) | ![Exceptions](exception.png) |
 
-| Settlement Q&A Assistant |
-| :---: |
-| ![Chat](chat.png) |
+| Financial Summary & Reports | Settlement Q&A Assistant |
+| :---: | :---: |
+| ![Summary](summary.png) | ![Chat](chat.png) |
 
 ---
 

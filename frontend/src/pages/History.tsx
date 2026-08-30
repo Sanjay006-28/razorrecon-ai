@@ -55,8 +55,27 @@ export default function History() {
 
   const formatDate = (ds: string | null) => {
     if (!ds) return "—";
-    return new Date(ds).toLocaleString("en-IN", {
-      dateStyle: "medium", timeStyle: "short"
+    const dateStr = ds.endsWith("Z") || ds.includes("+") ? ds : `${ds}Z`;
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) {
+      return new Date(ds).toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+    }
+    return date.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
     });
   };
 

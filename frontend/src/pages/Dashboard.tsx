@@ -340,7 +340,15 @@ export default function Dashboard() {
             )}
             {data.started_at && (
               <span className="text-xs text-gray-400 dark:text-gray-500">
-                {new Date(data.started_at).toLocaleString("en-IN")}
+                {new Date(data.started_at.endsWith("Z") || data.started_at.includes("+") ? data.started_at : `${data.started_at}Z`).toLocaleString("en-IN", {
+                  day: "2-digit",
+                  month: "short",
+                  year: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                  second: "2-digit",
+                  hour12: true,
+                })}
               </span>
             )}
           </div>
