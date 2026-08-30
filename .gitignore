@@ -48,6 +48,8 @@ coverage.xml
 # Sample / generated data (keep the script, ignore the output)
 # =============================================================================
 sample_data/
+sample_data_*/
+backend/sample_data_*/
 
 # =============================================================================
 # Uploads and temporary data

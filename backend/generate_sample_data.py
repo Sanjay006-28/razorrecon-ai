@@ -13,7 +13,14 @@ Injected issues (tracked and printed at the end):
 
 import os
 import random
+import sys
 from datetime import datetime, timedelta
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 import pandas as pd
 from faker import Faker
