@@ -71,56 +71,7 @@ Every exception in this run is independently verifiable — the sample data gene
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph CLIENT["Frontend Client (React + Vite + TypeScript)"]
-        UI_NAV["Navigation & Layout\n(Sidebar, Dark Mode)"]
-        UI_UP["CSV Upload Zone\n(Multi-File Drop, SLA Config)"]
-        UI_DASH["Live Dashboard\n(Recharts, Match Rate %, Invariants)"]
-        UI_EXC["Exceptions View\n(Diagnosis Cards, Filters, Search)"]
-        UI_CHAT["Gemini Chat Interface\n(Settlement Q&A Assistant)"]
-        UI_HIST["Run History & Trends"]
-    end
-
-    subgraph API_GATEWAY["API Layer (FastAPI REST Backend)"]
-        ROUTER_UP["/api/v1/reconcile/upload"]
-        ROUTER_SUM["/api/v1/reconcile/summary/{id}"]
-        ROUTER_EXC["/api/v1/reconcile/exceptions/{id}"]
-        ROUTER_CHAT["/api/v1/reconcile/chat"]
-        ROUTER_REP["/api/v1/reconcile/download-report/{id}"]
-        ROUTER_HIST["/api/v1/reconcile/runs"]
-    end
-
-    subgraph CORE_ENGINE["Reconciliation & Business Logic"]
-        VALIDATOR["Schema & File Validator\n(Pandas / Fast Ingestion)"]
-        REC_ENGINE["Reconciliation Engine\n(3-Way Join & 6 Anomaly Rules)"]
-        INV_CHECK["Financial Invariant Verifier\n(Total = Matched + Exceptions)"]
-        EXCEL_GEN["Excel Report Generator\n(openpyxl 3-Sheet Builder)"]
-    end
-
-    subgraph PERSISTENCE["Database Layer (SQLite + SQLAlchemy ORM)"]
-        DB_RUNS[("reconciliation_runs\n• Run Stats\n• Match Rate\n• Totals JSON")]
-        DB_EXCS[("exceptions\n• 6 Anomaly Types\n• Discrepancies\n• AI Explanation Cache")]
-    end
-
-    subgraph AI_SERVICES["AI & Intelligence Layer"]
-        GEMINI_CLIENT["Google Gemini API Client\n(SDK: google-genai)"]
-        MODEL_CHAIN["Model Fallback Chain\n(Gemini 2.5 Flash / Pro)"]
-        PROMPT_ENG["Grounded Prompt Engine\n(Zero Hallucination Context)"]
-    end
-
-    CLIENT <===>|HTTP / JSON REST API| API_GATEWAY
-    ROUTER_UP --> VALIDATOR --> REC_ENGINE --> INV_CHECK
-    INV_CHECK --> DB_RUNS & DB_EXCS
-    ROUTER_SUM --> DB_RUNS
-    ROUTER_EXC --> DB_EXCS
-    ROUTER_EXC --> GEMINI_CLIENT
-    ROUTER_CHAT --> PROMPT_ENG --> GEMINI_CLIENT
-    PROMPT_ENG <--> DB_RUNS & DB_EXCS
-    GEMINI_CLIENT --> MODEL_CHAIN
-    ROUTER_REP --> EXCEL_GEN
-    EXCEL_GEN <--> DB_RUNS & DB_EXCS
-```
+![System Architecture](architecture.png)
 
 ### Route Table & Components
 
