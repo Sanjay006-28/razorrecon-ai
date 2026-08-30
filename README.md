@@ -124,6 +124,7 @@ graph TB
 
 ### Route Table & Components
 
+```text
 React + Vite + TypeScript + Tailwind (frontend, port 5173)
         │  REST calls (axios)
         ▼
