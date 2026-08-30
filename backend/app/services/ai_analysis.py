@@ -18,13 +18,14 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 import time
 from google.genai import types
 
-# Active, stable Gemini Flash models in priority order
+# Confirmed active Gemini models on this key in optimal performance priority order
 PREFERRED_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
 ]
 
-MODEL_TIMEOUT_MS = 4000  # 4 seconds per model attempt
+MODEL_TIMEOUT_MS = 25000  # 25 seconds per model attempt
 
 
 def get_gemini_client() -> genai.Client | None:
@@ -92,14 +93,6 @@ def generate_gemini_content(client: genai.Client, contents: Any) -> tuple[str, s
 def analyze_exceptions_for_run(db: Session, run_id: int) -> list[dict[str, Any]]:
     """
     Generate or retrieve cached AI analysis for all exceptions of a reconciliation run.
-
-    Persistence & Caching:
-    - If exception rows in SQLite already have `ai_explanation` set, returns the
-      cached values directly without calling Gemini.
-    - If uncached rows exist, calls Gemini Flash in ONE single batch request for all
-      exceptions in the run, updates SQLite rows, and commits.
-    - If Gemini API is unreachable/missing key, returns clear fallback messages for
-      uncached exceptions while preserving any previously cached explanations.
     """
     rows = (
         db.query(ExceptionModel)
@@ -121,22 +114,6 @@ def analyze_exceptions_for_run(db: Session, run_id: int) -> list[dict[str, Any]]
     uncached_rows = [r for r in rows if r.ai_explanation is None]
     logger.info(f"[LIVE CALL] Initiating live Gemini analysis for run {run_id} ({len(uncached_rows)} uncached exceptions)...")
 
-    batch_input = [
-        {
-            "exception_id": r.id,
-            "type": r.exception_type,
-            "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
-            "payment_id": r.payment_id,
-            "order_id": r.order_id,
-            "description": r.description,
-            "internal_amount": r.internal_amount,
-            "bank_amount": r.bank_amount,
-            "discrepancy_amount": r.discrepancy_amount,
-            "exception_date": str(r.exception_date) if r.exception_date else None,
-        }
-        for r in uncached_rows
-    ]
-
     client = get_gemini_client()
     if not client:
         logger.warning("Gemini client unavailable. Using fallback messages for uncached exceptions.")
@@ -147,62 +124,81 @@ def analyze_exceptions_for_run(db: Session, run_id: int) -> list[dict[str, Any]]
         db.commit()
         return [_format_exception_analysis(r) for r in rows]
 
-    system_prompt = (
-        "You are a expert finance operations analyst at a top payments company.\n"
-        "You are analyzing financial reconciliation exception records.\n"
-        "STRICT CONSTRAINTS:\n"
-        "1. FORBIDDEN: Do NOT invent, assume, or hallucinate any numbers, dates, rates, or IDs.\n"
-        "2. Use only the numeric values supplied in the JSON. If a value is not supplied, describe the issue without inventing a number.\n"
-        "Task: For each exception item in the input array, produce a structured object with:\n"
-        "  - 'exception_id': (integer matching the input item id)\n"
-        "  - 'explanation': (a clear, one-sentence plain-English explanation)\n"
-        "  - 'root_cause': (the likely technical or operational root cause)\n"
-        "  - 'suggested_action': (a concrete suggested action for the finance team)\n\n"
-        "Return a valid JSON array of objects, one per input exception, with no extra markdown code block wrappers if possible.\n"
-        f"Input Exception Batch JSON:\n{json.dumps(batch_input)}"
-    )
+    # Chunk into smaller groups (e.g. 5 exceptions per request) so reasoning models return fast
+    CHUNK_SIZE = 5
+    for idx in range(0, len(uncached_rows), CHUNK_SIZE):
+        chunk = uncached_rows[idx:idx + CHUNK_SIZE]
+        batch_input = [
+            {
+                "exception_id": r.id,
+                "type": r.exception_type,
+                "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+                "payment_id": r.payment_id,
+                "order_id": r.order_id,
+                "description": r.description,
+                "internal_amount": r.internal_amount,
+                "bank_amount": r.bank_amount,
+                "discrepancy_amount": r.discrepancy_amount,
+                "exception_date": str(r.exception_date) if r.exception_date else None,
+            }
+            for r in chunk
+        ]
 
-    try:
-        raw_text, model_used = generate_gemini_content(client, system_prompt)
-        text = raw_text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+        system_prompt = (
+            "You are a expert finance operations analyst at a top payments company.\n"
+            "You are analyzing financial reconciliation exception records.\n"
+            "STRICT CONSTRAINTS:\n"
+            "1. FORBIDDEN: Do NOT invent, assume, or hallucinate any numbers, dates, rates, or IDs.\n"
+            "2. Use only the numeric values supplied in the JSON. If a value is not supplied, describe the issue without inventing a number.\n"
+            "Task: For each exception item in the input array, produce a structured object with:\n"
+            "  - 'exception_id': (integer matching the input item id)\n"
+            "  - 'explanation': (a clear, one-sentence plain-English explanation)\n"
+            "  - 'root_cause': (the likely technical or operational root cause)\n"
+            "  - 'suggested_action': (a concrete suggested action for the finance team)\n\n"
+            "Return a valid JSON array of objects, one per input exception, with no extra markdown code block wrappers if possible.\n"
+            f"Input Exception Batch JSON:\n{json.dumps(batch_input)}"
+        )
 
-        parsed_list = json.loads(text)
-        analysis_map = {
-            item["exception_id"]: item
-            for item in parsed_list
-            if isinstance(item, dict) and "exception_id" in item
-        }
+        try:
+            raw_text, model_used = generate_gemini_content(client, system_prompt)
+            text = raw_text.strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
 
-        for r in uncached_rows:
-            item = analysis_map.get(r.id)
-            if item:
-                r.ai_explanation = item.get("explanation", "Discrepancy identified during reconciliation batch run.")
-                r.ai_root_cause = item.get("root_cause", "Operational data variance.")
-                r.ai_suggested_action = item.get("suggested_action", "Inspect transaction record and verify with processor.")
-            else:
-                r.ai_explanation = "No AI analysis available for this transaction."
-                r.ai_root_cause = "Pending operational review."
-                r.ai_suggested_action = "Inspect transaction record manually."
+            parsed_list = json.loads(text)
+            analysis_map = {
+                item["exception_id"]: item
+                for item in parsed_list
+                if isinstance(item, dict) and "exception_id" in item
+            }
 
-        db.commit()
-        logger.info(f"[LIVE CALL COMPLETE] Successfully generated and cached AI analysis for {len(uncached_rows)} exceptions in run {run_id} using model {model_used}.")
+            for r in chunk:
+                item = analysis_map.get(r.id)
+                if item:
+                    r.ai_explanation = item.get("explanation", "Discrepancy identified during reconciliation batch run.")
+                    r.ai_root_cause = item.get("root_cause", "Operational data variance.")
+                    r.ai_suggested_action = item.get("suggested_action", "Inspect transaction record and verify with processor.")
+                else:
+                    r.ai_explanation = "No AI analysis available for this transaction."
+                    r.ai_root_cause = "Pending operational review."
+                    r.ai_suggested_action = "Inspect transaction record manually."
 
-    except Exception as exc:
-        logger.error(f"Gemini API call failed for run {run_id}: {exc}")
-        db.rollback()
-        # Fallback without throwing stack traces
-        for r in uncached_rows:
-            r.ai_explanation = "AI analysis unavailable: Service timeout or rate limit exceeded."
-            r.ai_root_cause = "Gemini API unavailable."
-            r.ai_suggested_action = "Check API key quotas or retry request later."
-        db.commit()
+            db.commit()
+            logger.info(f"[LIVE CHUNK COMPLETE] Successfully generated and cached AI analysis for chunk of {len(chunk)} exceptions in run {run_id} using {model_used}.")
+
+        except Exception as exc:
+            logger.error(f"Gemini API chunk call failed for run {run_id}: {exc}")
+            db.rollback()
+            for r in chunk:
+                r.ai_explanation = "AI analysis unavailable: Service timeout or rate limit exceeded."
+                r.ai_root_cause = "Gemini API unavailable."
+                r.ai_suggested_action = "Check API key quotas or retry request later."
+            db.commit()
 
     return [_format_exception_analysis(r) for r in rows]
 
