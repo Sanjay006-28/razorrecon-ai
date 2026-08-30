@@ -15,13 +15,16 @@ logger = logging.getLogger(__name__)
 # Load backend/.env if present
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 
-# Primary model: gemini-3.5-flash (clean, 0 failed round-trips, stable free tier quota)
+import time
+from google.genai import types
+
+# Active, stable Gemini Flash models in priority order
 PREFERRED_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 ]
+
+MODEL_TIMEOUT_MS = 4000  # 4 seconds per model attempt
 
 
 def get_gemini_client() -> genai.Client | None:
@@ -45,24 +48,45 @@ def get_gemini_model():
 
 def generate_gemini_content(client: genai.Client, contents: Any) -> tuple[str, str]:
     """
-    Generate content attempting preferred Gemini models with fallback.
+    Generate content attempting preferred Gemini models with fallback and timing logs.
     Returns (response_text, model_id_used).
     """
+    attempted_logs = []
     for model_name in PREFERRED_MODELS:
+        start_time = time.perf_counter()
+        logger.info(f"[AI Chain] Attempting model '{model_name}' (timeout: {MODEL_TIMEOUT_MS}ms)...")
         try:
+            config = types.GenerateContentConfig(
+                http_options=types.HttpOptions(timeout=MODEL_TIMEOUT_MS)
+            )
             response = client.models.generate_content(
                 model=model_name,
                 contents=contents,
+                config=config,
             )
+            elapsed = time.perf_counter() - start_time
             if response and response.text:
-                logger.info(f"Gemini API call served successfully by model: {model_name}")
+                logger.info(
+                    f"[AI Chain] Model '{model_name}' SUCCEEDED in {elapsed:.2f}s"
+                )
                 return response.text, model_name
+            else:
+                elapsed = time.perf_counter() - start_time
+                logger.warning(
+                    f"[AI Chain] Model '{model_name}' returned empty response in {elapsed:.2f}s, trying next model..."
+                )
+                attempted_logs.append(f"{model_name}: empty ({elapsed:.2f}s)")
         except Exception as exc:
-            if "404" in str(exc) or "NOT_FOUND" in str(exc):
-                logger.warning(f"Model {model_name} unavailable: {exc}, trying fallback model.")
-                continue
-            raise
-    raise RuntimeError("No available Gemini model responded successfully.")
+            elapsed = time.perf_counter() - start_time
+            err_summary = f"{type(exc).__name__}: {str(exc)[:100]}"
+            logger.warning(
+                f"[AI Chain] Model '{model_name}' FAILED in {elapsed:.2f}s ({err_summary}), trying fallback..."
+            )
+            attempted_logs.append(f"{model_name}: failed in {elapsed:.2f}s ({err_summary})")
+            continue
+
+    total_attempts = ", ".join(attempted_logs)
+    raise RuntimeError(f"All Gemini models exhausted without success: [{total_attempts}]")
 
 
 def analyze_exceptions_for_run(db: Session, run_id: int) -> list[dict[str, Any]]:
