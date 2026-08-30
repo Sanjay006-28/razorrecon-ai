@@ -6,6 +6,18 @@ Built for the Razorpay Buildathon — Track 04: AI Finance Controller.
 
 ---
 
+## Screenshots
+
+| Dashboard Overview | Exception Diagnosis |
+| :---: | :---: |
+| ![Dashboard](dashboard.png) | ![Exceptions](exception.png) |
+
+| Settlement Q&A Assistant |
+| :---: |
+| ![Chat](chat.png) |
+
+---
+
 ## The Problem
 
 Every settlement cycle, finance teams manually cross-check thousands of payments against internal settlement records and bank credits. Mismatches, duplicates, unsettled payments, and SLA breaches hide inside that data — and finding them by hand is slow, error-prone, and doesn't scale.
