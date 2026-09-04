@@ -1,12 +1,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Bot, Loader2, Send, Sparkles, User } from "lucide-react";
+import { AlertCircle, Bot, Loader2, Send, Sparkles, Trash2, User } from "lucide-react";
 import RunSelector from "../components/RunSelector";
 import { api } from "../lib/api";
-
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-}
+import { useChat } from "../context/ChatContext";
 
 const EXAMPLE_PROMPTS = [
   "Which exceptions have the highest amount impact?",
@@ -84,7 +80,8 @@ export default function Chat() {
   const [runId, setRunId] = useState<number>(
     () => Number(localStorage.getItem("lastRunId") || 1)
   );
-  const [messages, setMessages] = useState<Message[]>([]);
+  const { getMessages, setMessagesForRun, clearMessagesForRun } = useChat();
+  const messages = getMessages(runId);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,7 +91,6 @@ export default function Chat() {
     if (Number.isFinite(runId) && runId > 0) {
       localStorage.setItem("lastRunId", String(runId));
     }
-    setMessages([]);
     setError(null);
   }, [runId]);
 
@@ -107,7 +103,7 @@ export default function Chat() {
     if (!text || loading || !Number.isFinite(runId) || runId <= 0) return;
 
     const priorMessages = messages;
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setMessagesForRun(runId, (prev) => [...prev, { role: "user", content: text }]);
     setInput("");
     setError(null);
     setLoading(true);
@@ -122,7 +118,7 @@ export default function Chat() {
         })),
       });
 
-      setMessages((prev) => [
+      setMessagesForRun(runId, (prev) => [
         ...prev,
         { role: "assistant", content: res.response || "No response received." },
       ]);
@@ -130,7 +126,7 @@ export default function Chat() {
       const message =
         err instanceof Error ? err.message : "Unable to reach chatbot service.";
       setError(message);
-      setMessages((prev) => [
+      setMessagesForRun(runId, (prev) => [
         ...prev,
         {
           role: "assistant",
@@ -160,10 +156,27 @@ export default function Chat() {
           </p>
         </div>
 
-        <RunSelector
-          value={String(runId)}
-          onChange={(id: string) => setRunId(Number(id))}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          {messages.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                clearMessagesForRun(runId);
+                setError(null);
+              }}
+              className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-red-900/50 dark:hover:bg-red-950/30 dark:hover:text-red-400"
+              title="Clear conversation for this run"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Clear conversation</span>
+            </button>
+          )}
+
+          <RunSelector
+            value={String(runId)}
+            onChange={(id: string) => setRunId(Number(id))}
+          />
+        </div>
       </div>
 
       {error && (

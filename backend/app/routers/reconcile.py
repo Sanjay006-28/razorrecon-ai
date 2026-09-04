@@ -693,6 +693,13 @@ def get_summary(run_id: int, db: Session = Depends(get_db)):
 # GET /exceptions/{run_id}
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _has_real_ai(explanation: Optional[str]) -> bool:
+    """True when the row holds a genuine cached AI analysis, not a fallback placeholder."""
+    return bool(explanation) and not explanation.startswith(
+        ("AI analysis unavailable", "No AI analysis available")
+    )
+
+
 @router.get(
     "/exceptions/{run_id}",
     summary="Get paginated exceptions for a run",
@@ -784,6 +791,11 @@ def get_exceptions(
                 "discrepancy_amount": exc.discrepancy_amount,
                 "is_resolved":       bool(exc.is_resolved),
                 "reconciliation_run_id": exc.reconciliation_run_id,
+                # Cached AI analysis (only genuine results; placeholders are sent as
+                # null so the client re-fetches instead of showing a stale fallback).
+                "ai_explanation":      exc.ai_explanation if _has_real_ai(exc.ai_explanation) else None,
+                "ai_root_cause":       exc.ai_root_cause if _has_real_ai(exc.ai_explanation) else None,
+                "ai_suggested_action": exc.ai_suggested_action if _has_real_ai(exc.ai_explanation) else None,
             }
             for exc in rows
         ],

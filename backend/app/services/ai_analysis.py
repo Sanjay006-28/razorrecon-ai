@@ -18,14 +18,18 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 import time
 from google.genai import types
 
-# Confirmed active Gemini models on this key in optimal performance priority order
+# Valid Gemini model IDs for this API key (confirmed via live testing)
+# Use models/ prefix — required for this key's API endpoint
 PREFERRED_MODELS = [
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
+    "models/gemini-3.6-flash",       # ✅ confirmed working — try first
+    "models/gemini-3.5-flash",       # fallback (503 during high demand spikes)
+    "models/gemini-3.7-flash",       # fallback (per quota dashboard)
+    "models/gemini-3.5-flash-lite",  # lightest fallback — highest RPM limit (15/min)
 ]
 
 MODEL_TIMEOUT_MS = 25000  # 25 seconds per model attempt
+MAX_RETRIES = 1            # 1 retry per model before moving to next
+RETRY_BACKOFF_BASE = 2.0  # exponential backoff base (seconds)
 
 
 def get_gemini_client() -> genai.Client | None:
@@ -49,42 +53,55 @@ def get_gemini_model():
 
 def generate_gemini_content(client: genai.Client, contents: Any) -> tuple[str, str]:
     """
-    Generate content attempting preferred Gemini models with fallback and timing logs.
-    Returns (response_text, model_id_used).
+    Generate content attempting preferred Gemini models with fallback, retry,
+    and exponential backoff. Returns (response_text, model_id_used).
     """
     attempted_logs = []
     for model_name in PREFERRED_MODELS:
-        start_time = time.perf_counter()
-        logger.info(f"[AI Chain] Attempting model '{model_name}' (timeout: {MODEL_TIMEOUT_MS}ms)...")
-        try:
-            config = types.GenerateContentConfig(
-                http_options=types.HttpOptions(timeout=MODEL_TIMEOUT_MS)
-            )
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config,
-            )
-            elapsed = time.perf_counter() - start_time
-            if response and response.text:
-                logger.info(
-                    f"[AI Chain] Model '{model_name}' SUCCEEDED in {elapsed:.2f}s"
+        for attempt in range(MAX_RETRIES + 1):
+            start_time = time.perf_counter()
+            if attempt > 0:
+                delay = RETRY_BACKOFF_BASE ** attempt
+                logger.info(f"[AI Chain] Retry {attempt}/{MAX_RETRIES} for '{model_name}' after {delay:.1f}s backoff...")
+                time.sleep(delay)
+
+            logger.info(f"[AI Chain] Attempting model '{model_name}' (timeout: {MODEL_TIMEOUT_MS}ms, attempt {attempt + 1})...")
+            try:
+                config = types.GenerateContentConfig(
+                    http_options=types.HttpOptions(timeout=MODEL_TIMEOUT_MS)
                 )
-                return response.text, model_name
-            else:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
                 elapsed = time.perf_counter() - start_time
+                if response and response.text:
+                    logger.info(
+                        f"[AI Chain] Model '{model_name}' SUCCEEDED in {elapsed:.2f}s (attempt {attempt + 1})."
+                    )
+                    return response.text, model_name
+                else:
+                    logger.warning(
+                        f"[AI Chain] Model '{model_name}' returned empty response in {elapsed:.2f}s."
+                    )
+                    attempted_logs.append(f"{model_name}: empty ({elapsed:.2f}s)")
+                    break  # empty response — try next model, no point retrying
+            except Exception as exc:
+                elapsed = time.perf_counter() - start_time
+                err_summary = f"{type(exc).__name__}: {str(exc)[:120]}"
+                is_rate_limit = "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+                is_transient = "504" in str(exc) or "503" in str(exc) or "DEADLINE" in str(exc) or "UNAVAILABLE" in str(exc)
                 logger.warning(
-                    f"[AI Chain] Model '{model_name}' returned empty response in {elapsed:.2f}s, trying next model..."
+                    f"[AI Chain] Model '{model_name}' FAILED in {elapsed:.2f}s ({err_summary})"
+                    + (f", retrying..." if (is_transient or is_rate_limit) and attempt < MAX_RETRIES else ", trying next model...")
                 )
-                attempted_logs.append(f"{model_name}: empty ({elapsed:.2f}s)")
-        except Exception as exc:
-            elapsed = time.perf_counter() - start_time
-            err_summary = f"{type(exc).__name__}: {str(exc)[:100]}"
-            logger.warning(
-                f"[AI Chain] Model '{model_name}' FAILED in {elapsed:.2f}s ({err_summary}), trying fallback..."
-            )
-            attempted_logs.append(f"{model_name}: failed in {elapsed:.2f}s ({err_summary})")
-            continue
+                if (is_transient or is_rate_limit) and attempt < MAX_RETRIES:
+                    attempted_logs.append(f"{model_name}: transient fail attempt {attempt + 1}")
+                    continue  # retry same model
+                else:
+                    attempted_logs.append(f"{model_name}: failed in {elapsed:.2f}s ({err_summary})")
+                    break  # move to next model
 
     total_attempts = ", ".join(attempted_logs)
     raise RuntimeError(f"All Gemini models exhausted without success: [{total_attempts}]")
@@ -104,14 +121,24 @@ def analyze_exceptions_for_run(db: Session, run_id: int) -> list[dict[str, Any]]
     if not rows:
         return []
 
-    # Check if all rows are already cached
-    all_cached = all(r.ai_explanation is not None for r in rows)
+    # Check if all rows are already cached with real valid explanations
+    all_cached = all(
+        r.ai_explanation is not None
+        and not r.ai_explanation.startswith("AI analysis unavailable")
+        and not r.ai_explanation.startswith("No AI analysis available")
+        for r in rows
+    )
     if all_cached:
         logger.info(f"[CACHE HIT] Serving cached AI exception analysis for run {run_id} from SQLite.")
         return [_format_exception_analysis(r) for r in rows]
 
-    # Prepare batch payload for uncached exceptions
-    uncached_rows = [r for r in rows if r.ai_explanation is None]
+    # Prepare batch payload for uncached or previously failed exceptions
+    uncached_rows = [
+        r for r in rows
+        if r.ai_explanation is None
+        or r.ai_explanation.startswith("AI analysis unavailable")
+        or r.ai_explanation.startswith("No AI analysis available")
+    ]
     logger.info(f"[LIVE CALL] Initiating live Gemini analysis for run {run_id} ({len(uncached_rows)} uncached exceptions)...")
 
     client = get_gemini_client()
@@ -124,7 +151,7 @@ def analyze_exceptions_for_run(db: Session, run_id: int) -> list[dict[str, Any]]
         db.commit()
         return [_format_exception_analysis(r) for r in rows]
 
-    # Chunk into smaller groups (e.g. 5 exceptions per request) so reasoning models return fast
+    # Chunk into groups of 5 — large enough to be efficient, small enough to avoid timeouts
     CHUNK_SIZE = 5
     for idx in range(0, len(uncached_rows), CHUNK_SIZE):
         chunk = uncached_rows[idx:idx + CHUNK_SIZE]

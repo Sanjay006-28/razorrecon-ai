@@ -9,6 +9,26 @@ const apiClient: AxiosInstance = axios.create({
   timeout: 30_000,
 });
 
+// Longer timeout for AI chat (Gemini can take 20-40s with retries)
+const chatClient: AxiosInstance = axios.create({
+  baseURL: "http://127.0.0.1:8001",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 90_000,
+});
+
+// Extra-long timeout for AI exception analysis: the first (cold) call for a run
+// analyzes every exception via sequential Gemini batches (~80s for ~20 exceptions),
+// far beyond the default 30s. Once cached, the list endpoint serves it instantly.
+const analysisClient: AxiosInstance = axios.create({
+  baseURL: "http://127.0.0.1:8001",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 150_000,
+});
+
 // ─── Request interceptor (attach auth tokens if needed later) ────────────────
 apiClient.interceptors.request.use(
   (config) => config,
@@ -122,8 +142,8 @@ export const api = {
       del<{ message: string; run_id: number }>(`/api/v1/reconcile/runs/${runId}`),
     deleteAllRuns: () =>
       del<{ message: string; count: number }>("/api/v1/reconcile/runs", { confirm: true }),
-    getAiAnalysis: (runId: number) =>
-      get<Array<{
+    getAiAnalysis: async (runId: number) => {
+      const res = await analysisClient.get<Array<{
         id: number;
         payment_id: string | null;
         order_id: string | null;
@@ -132,7 +152,9 @@ export const api = {
         explanation: string;
         root_cause: string;
         suggested_action: string;
-      }>>(`/api/v1/reconcile/exceptions/${runId}/ai-analysis`),
+      }>>(`/api/v1/reconcile/exceptions/${runId}/ai-analysis`);
+      return res.data;
+    },
     downloadReport: async (runId: number) => {
       const res = await apiClient.get(`/api/v1/reconcile/report/${runId}`, {
         responseType: "blob",
@@ -157,7 +179,7 @@ export const api = {
       message: string;
       conversation_history?: Array<{ role: "user" | "assistant"; content: string }>;
     }) =>
-      post<{ response: string }>("/api/v1/reconcile/chat", data),
+      chatClient.post<{ response: string }>("/api/v1/reconcile/chat", data).then(r => r.data),
   },
 
 
