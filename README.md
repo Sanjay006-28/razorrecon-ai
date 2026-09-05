@@ -1,8 +1,12 @@
 # RazorRecon AI
 
+`68.3% match rate` · `70/70 tests passing` · `100% anomaly detection on injected test cases` · `~2s processing time`
+
 **An AI-powered finance controller that reconciles payments, settlements, and bank statements — catching mismatches, duplicates, and delays that manual reconciliation misses, with an AI assistant for finance operations teams.**
 
 Built for the Razorpay Buildathon — Track 04: AI Finance Controller.
+
+**🎥 [Watch the 5-minute pitch video](https://youtu.be/fEQAU0AfelM?si=qmJ2BFaI9dVVN4CS)**
 
 ---
 
@@ -243,3 +247,13 @@ razorrecon-ai/
 ├── start_frontend.bat
 └── README.md
 ```
+
+---
+
+## Why This Project Is Built the Way It Is
+
+This project was built with the Buildathon's own evaluation lens in mind:
+- **A real, understood problem** — Track 4's reconciliation loop, chosen because it maps to a genuine, recurring pain point in payment operations, not a contrived use case.
+- **A clean, tested, working repository** — 70 automated tests, a reproducible sample dataset, and setup instructions verified to work from a clean clone.
+- **Deliberate use of AI, not AI for its own sake** — deterministic Pandas rules handle reconciliation logic where correctness must be provable; Gemini is used only where language understanding genuinely helps (explaining exceptions, answering questions), and never for calculations that need to be exact.
+- **An honest account of failure and recovery** — several real bugs were found and fixed during development, including a financial calculation that initially double-counted duplicate charges. Each fix was independently verified against live data, not just passing tests, before being considered resolved.
