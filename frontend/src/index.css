@@ -20,8 +20,37 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html.dark body {
+  background-color: #030712;
+  color: #F9FAFB;
+}
+
 /* Subtle scrollbar */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 9999px; }
 ::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+
+html.dark ::-webkit-scrollbar-thumb { background: #374151; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #4B5563; }
+
+/* Sleek chat input scrollbar */
+.chat-textarea {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(156, 163, 175, 0.3) transparent;
+}
+.chat-textarea::-webkit-scrollbar {
+  width: 4px;
+}
+.chat-textarea::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 6px 0;
+}
+.chat-textarea::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.3);
+  border-radius: 9999px;
+}
+.chat-textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(156, 163, 175, 0.6);
+}
+

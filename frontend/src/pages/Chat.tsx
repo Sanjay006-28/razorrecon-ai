@@ -5,9 +5,9 @@ import { api } from "../lib/api";
 import { useChat } from "../context/ChatContext";
 
 const EXAMPLE_PROMPTS = [
-  "Which exceptions have the highest amount impact?",
-  "Why is my match rate 68.25%?",
-  "Summarize the duplicate payments found in this run.",
+  "Which exceptions have the highest financial impact and total amount at risk?",
+  "Based on the Exceptions by Type chart, which category is the most frequent?",
+  "What is the root cause of the amount mismatches, and what action should we take?",
 ];
 
 function renderInlineMarkdown(text: string) {
@@ -86,6 +86,7 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (Number.isFinite(runId) && runId > 0) {
@@ -105,6 +106,10 @@ export default function Chat() {
     const priorMessages = messages;
     setMessagesForRun(runId, (prev) => [...prev, { role: "user", content: text }]);
     setInput("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.overflowY = "hidden";
+    }
     setError(null);
     setLoading(true);
 
@@ -135,6 +140,22 @@ export default function Chat() {
       ]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(event.target.value);
+    const el = event.target;
+    el.style.height = "auto";
+    const nextHeight = Math.min(el.scrollHeight, 128);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > 128 ? "auto" : "hidden";
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage();
     }
   };
 
@@ -264,20 +285,23 @@ export default function Chat() {
 
         <form
           onSubmit={handleSubmit}
-          className="flex gap-3 border-t border-gray-100 p-3 dark:border-gray-700"
+          className="flex items-end gap-3 border-t border-gray-100 p-3 dark:border-gray-700"
         >
-          <input
-            type="text"
+          <textarea
+            ref={textareaRef}
+            rows={1}
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
             disabled={loading}
             placeholder="Ask about match rates, exception impacts, or specific payments..."
-            className="min-w-0 flex-1 rounded-xl border border-transparent bg-gray-50 px-3 py-2.5 text-sm text-gray-800 outline-none transition-colors placeholder:text-gray-400 focus:border-indigo-500 focus:bg-white focus:ring-1 focus:ring-indigo-500 dark:bg-gray-900 dark:text-gray-100 dark:focus:bg-gray-950"
+            style={{ overflowY: "hidden" }}
+            className="chat-textarea min-w-0 flex-1 resize-none rounded-xl border border-transparent bg-gray-50 px-3.5 py-2.5 text-sm leading-relaxed text-gray-800 outline-none transition-colors placeholder:text-gray-400 focus:border-indigo-500 focus:bg-white focus:ring-1 focus:ring-indigo-500 dark:bg-gray-900 dark:text-gray-100 dark:focus:bg-gray-950 max-h-32"
           />
           <button
             type="submit"
             disabled={!input.trim() || loading}
-            className="flex h-10 items-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 dark:disabled:bg-gray-700/50"
+            className="flex h-10 flex-shrink-0 items-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 dark:disabled:bg-gray-700/50 mb-0.5"
           >
             <Send size={15} />
             <span className="hidden sm:inline">Send</span>

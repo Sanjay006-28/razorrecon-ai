@@ -21,19 +21,20 @@ from google.genai import types
 # Valid Gemini model IDs for this API key (confirmed via live testing)
 # Use models/ prefix — required for this key's API endpoint
 PREFERRED_MODELS = [
-    "models/gemini-3.6-flash",       # ✅ confirmed working — try first
-    "models/gemini-3.5-flash",       # fallback (503 during high demand spikes)
-    "models/gemini-3.7-flash",       # fallback (per quota dashboard)
-    "models/gemini-3.5-flash-lite",  # lightest fallback — highest RPM limit (15/min)
+    "models/gemini-3.6-flash",       # ✅ primary: fastest & highest quality (~1.5s)
+    "models/gemini-3.5-flash",       # fallback
+    "models/gemini-3.7-flash",       # fallback
+    "models/gemini-3.5-flash-lite",  # light fallback
 ]
 
 MODEL_TIMEOUT_MS = 25000  # 25 seconds per model attempt
-MAX_RETRIES = 1            # 1 retry per model before moving to next
-RETRY_BACKOFF_BASE = 2.0  # exponential backoff base (seconds)
+MAX_RETRIES = 1            # 1 retry on transient server error before moving to next model
+RETRY_BACKOFF_BASE = 1.5  # exponential backoff base (seconds)
 
 
 def get_gemini_client() -> genai.Client | None:
     """Configure and return the Gemini genai.Client if API key is present."""
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key or api_key.strip() in ("", "your_gemini_api_key_here", "PASTE_YOUR_KEY_HERE"):
         logger.warning("GEMINI_API_KEY missing or unconfigured.")
@@ -94,9 +95,9 @@ def generate_gemini_content(client: genai.Client, contents: Any) -> tuple[str, s
                 is_transient = "504" in str(exc) or "503" in str(exc) or "DEADLINE" in str(exc) or "UNAVAILABLE" in str(exc)
                 logger.warning(
                     f"[AI Chain] Model '{model_name}' FAILED in {elapsed:.2f}s ({err_summary})"
-                    + (f", retrying..." if (is_transient or is_rate_limit) and attempt < MAX_RETRIES else ", trying next model...")
+                    + (f", retrying..." if is_transient and attempt < MAX_RETRIES else ", trying next model...")
                 )
-                if (is_transient or is_rate_limit) and attempt < MAX_RETRIES:
+                if is_transient and attempt < MAX_RETRIES:
                     attempted_logs.append(f"{model_name}: transient fail attempt {attempt + 1}")
                     continue  # retry same model
                 else:
